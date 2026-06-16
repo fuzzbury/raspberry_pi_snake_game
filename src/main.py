@@ -121,13 +121,14 @@ class Snake:
         
         # Update tail
         if old_head != self.head:
-            if len(self.tail) > 0:
-                self.tail.insert(0, tuple(old_head))
-                # Only grow if growth counter > 0
-                if self.growth_counter <= 0:
-                    self.tail.pop()
-                else:
-                    self.growth_counter -= 1
+            self.tail.insert(0, tuple(old_head))
+            # Only grow if growth counter > 0
+            if self.growth_counter == 0:
+                self.tail.pop()
+            
+
+            self.growth_counter -= 1
+            self.growth_counter = max(self.growth_counter, 0)
     
     def grow(self, amount=1):
         """Add segments to the snake's growth counter."""
@@ -230,7 +231,7 @@ def main():
             # Update apple timer
             time_since_last_apple += 1
             
-            # Check apple collision for snake1
+            # Check apple collision for snake1s
             if apple and snake1.head == list(apple):
                 snake1.grow(1)
                 time_since_last_apple = 0
