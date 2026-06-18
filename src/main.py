@@ -5,7 +5,8 @@ import enum
 import random
 import curses
 import logging
-
+alive1 = True
+alive2 = True
 BOARD_SIZE = 8
 
 # Log to a file instead of stdout — curses takes over the terminal display so
@@ -65,13 +66,13 @@ class Snake:
             self.head[0] += 1
 
         # Keep the head clamped inside the 8x8 board
-        self.head[0] = min(max(self.head[0], 0), BOARD_SIZE - 1)
-        self.head[1] = min(max(self.head[1], 0), BOARD_SIZE - 1)
+        #self.head[0] = min(max(self.head[0], 0), BOARD_SIZE - 1)
+        #self.head[1] = min(max(self.head[1], 0), BOARD_SIZE - 1)
 
         # Only extend the tail if the head actually moved (hitting a wall keeps it still)
         if old_head != self.head:
             # The old head position becomes the newest tail segment
-            self.tail.insert(0, tuple(old_head))
+            self.tail.insert(0, old_head)
 
             if self.growth_counter == 0:
                 # No pending growth — drop the last tail segment to keep the length the same
@@ -80,19 +81,24 @@ class Snake:
             # Consume one unit of pending growth (floor at 0 to avoid going negative)
             self.growth_counter = max(self.growth_counter - 1, 0)
 
+    def is_head_outside_board(self):
+        """Return True if the snake's head is outside the 8x8 board."""
+        return not (0 <= self.head[0] < BOARD_SIZE and 0 <= self.head[1] < BOARD_SIZE)
+
     def grow(self, amount=1):
         """Schedule the snake to gain `amount` extra segments on upcoming updates."""
         self.growth_counter += amount
 
     def get_all_positions(self):
         """Return every grid cell currently occupied by this snake (head + all tail segments)."""
-        return [tuple(self.head)] + self.tail
+        return [self.head] + self.tail
 
     def display(self, sense):
         """Light up every cell this snake occupies on the Sense HAT LED matrix."""
         for (x, y) in self.tail:
-            sense.set_pixel(x, y, self.color)
-        sense.set_pixel(self.head[0], self.head[1], self.color)
+            sense.set_pixel(x, y, self.color) 
+        if not self.is_head_outside_board():
+            sense.set_pixel(self.head[0], self.head[1], self.color)
 
     @staticmethod
     def _is_opposite_direction(current, next_dir):
@@ -135,12 +141,12 @@ def main(stdscr):
         # --- Spawn apple ---
         # If there is no apple on the board, pick a random unoccupied cell and place one
         if apple is None:
-            occupied = set(snake1.get_all_positions() + snake2.get_all_positions())
+            occupied = snake1.get_all_positions() + snake2.get_all_positions()
             empty_cells = [
-                (x, y)
+                [x, y]
                 for x in range(BOARD_SIZE)
                 for y in range(BOARD_SIZE)
-                if (x, y) not in occupied
+                if [x, y] not in occupied
             ]
             if empty_cells:
                 apple = random.choice(empty_cells)
@@ -178,12 +184,12 @@ def main(stdscr):
         snake2.update()
 
         # Check if snake 1's head landed on the apple
-        if apple and snake1.head == list(apple):
+        if apple and snake1.head == apple:
             snake1.grow(1)
             apple = None
 
         # Check if snake 2's head landed on the apple
-        if apple and snake2.head == list(apple):
+        if apple and snake2.head == apple:
             snake2.grow(1)
             apple = None
 
@@ -194,10 +200,32 @@ def main(stdscr):
             sense.set_pixel(apple[0], apple[1], red)
         snake1.display(sense)
         snake2.display(sense)
+        #test for game over conditions
+        alive1 = True
+        alive2 = True
 
+
+        if (snake1.head in snake1.tail 
+            or snake1.head in snake2.get_all_positions() 
+            or snake1.is_head_outside_board()):
+            alive1 = False
+
+        if (snake2.head in snake2.tail
+            or snake2.head in snake1.get_all_positions() 
+            or snake2.is_head_outside_board()):
+            alive2 = False
+    
         # Wait before the next tick — reducing this value speeds the game up
         time.sleep(0.5)
-
+        if not alive1 and not alive2:
+            sense.show_message("Draw!", text_colour=[255, 0, 0])
+            break
+        elif not alive1:
+            sense.show_message("Blue!", text_colour=blue)
+            break
+        elif not alive2:
+            sense.show_message("Green!", text_colour=green)
+            break
 
 if __name__ == "__main__":
     # curses.wrapper sets up curses, passes a screen object to main(),
