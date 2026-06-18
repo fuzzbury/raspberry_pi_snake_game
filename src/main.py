@@ -1,73 +1,37 @@
+
+#to install a virtual enviroment with access to the system packages
+#Tools -> Open System Shell
+#python3 -m venv --system-site-packages /home/alex/Documents/thonny_experiment/python_venv
+
+#then
+#close window
+#Tools->options->intrepreter and select you folder above (go into bin and find python3)
+
+#Tools -> Open System Shell
+#pip install pynput
+#
+
 import sense_hat
 from sense_hat import SenseHat
 import time
 import enum
 import random
-import sys
-import tty
-import termios
-import select
-import os
-import threading
+import logging
+from pynput import keyboard #pip install pynput
 
 BOARD_SIZE = 8
 
-import logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
+# Log to a file instead of stdout so it doesn't interfere with game output.
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    handlers=[logging.FileHandler('snake_debug.log')]
+)
 logger = logging.getLogger(__name__)
 
 
-class NonBlockingKeyboard:
-    def __enter__(self):
-        self.fd = sys.stdin.fileno()
-        self.old_settings = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
-
-    def get_key(self):
-        if select.select([sys.stdin], [], [], 0)[0]:
-            return sys.stdin.read(1)
-        return None
-
-
-# Shared last-key storage (thread-safe)
-last_key_pressed = None
-key_lock = threading.Lock()
-
-
-def key_reader(stop_event):
-    """Background thread: reads keys and stores the last key pressed."""
-    global last_key_pressed
-    with NonBlockingKeyboard() as kb:
-        while not stop_event.is_set():
-            k = kb.get_key()
-            if k is None:
-                time.sleep(0.01)
-                continue
-            # handle escape sequences for arrows
-            if k == '\x1b':
-                k2 = kb.get_key()
-                if k2 == '[':
-                    k3 = kb.get_key()
-                    if k3:
-                        mapping = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left'}
-                        mapped = mapping.get(k3)
-                        with key_lock:
-                            last_key_pressed = mapped
-                        logger.debug(f"key_reader mapped arrow: {repr(mapped)}")
-                        continue
-                # unrecognized escape sequence; skip
-                continue
-            # normal key
-            with key_lock:
-                last_key_pressed = k
-            logger.debug(f"key_reader read key: {repr(k)}")
-    logger.debug("key_reader exiting")
-
 class Direction(enum.Enum):
+    # Four possible movement directions for a snake
     UP = 1
     DOWN = 2
     LEFT = 3
@@ -76,36 +40,33 @@ class Direction(enum.Enum):
 
 class Snake:
     """Represents a snake in the game."""
-    
+
     def __init__(self, start_pos, start_direction, color):
-        """
-        Initialize a snake.
-        
-        Args:
-            start_pos: Tuple (x, y) for the starting head position
-            start_direction: Direction enum for initial direction
-            color: Tuple (r, g, b) for the snake's color
-        """
+        # Head is a mutable list so we can update x/y in place each tick
         self.head = list(start_pos)
+        # Tail is an ordered list of (x, y) tuples, newest segment first
         self.tail = []
         self.direction = start_direction
+        # next_direction buffers player input so the turn only takes effect on the next update
         self.next_direction = start_direction
         self.color = color
+        # How many extra segments are still to be added on future updates
         self.growth_counter = 0
-    
+
     def set_direction(self, direction):
-        """Set the next direction for the snake."""
+        """Queue a direction change; it is applied on the next call to update()."""
         self.next_direction = direction
-    
+
     def update(self):
-        """Update the snake's position."""
-        # Update direction (prevents 180-degree turns)
+        """Advance the snake one step in its current direction."""
+        # Ignore the queued direction if it would reverse the snake back on itself
         if not self._is_opposite_direction(self.direction, self.next_direction):
             self.direction = self.next_direction
-        
+
+        # Save the current head position before moving so we can push it onto the tail
         old_head = [self.head[0], self.head[1]]
-        
-        # Move head based on direction
+
+        # Move the head one cell in the current direction
         if self.direction == Direction.UP:
             self.head[1] -= 1
         elif self.direction == Direction.DOWN:
@@ -114,39 +75,45 @@ class Snake:
             self.head[0] -= 1
         elif self.direction == Direction.RIGHT:
             self.head[0] += 1
-        
-        # Clamp to board boundaries
-        self.head[0] = min(max(self.head[0], 0), BOARD_SIZE - 1)
-        self.head[1] = min(max(self.head[1], 0), BOARD_SIZE - 1)
-        
-        # Update tail
-        if old_head != self.head:
-            self.tail.insert(0, tuple(old_head))
-            # Only grow if growth counter > 0
-            if self.growth_counter == 0:
-                self.tail.pop()
-            
 
-            self.growth_counter -= 1
-            self.growth_counter = max(self.growth_counter, 0)
-    
+        # Keep the head clamped inside the 8x8 board
+        #self.head[0] = min(max(self.head[0], 0), BOARD_SIZE - 1)
+        #self.head[1] = min(max(self.head[1], 0), BOARD_SIZE - 1)
+
+        # Only extend the tail if the head actually moved (hitting a wall keeps it still)
+        if old_head != self.head:
+            # The old head position becomes the newest tail segment
+            self.tail.insert(0, old_head)
+
+            if self.growth_counter == 0:
+                # No pending growth — drop the last tail segment to keep the length the same
+                self.tail.pop()
+
+            # Consume one unit of pending growth (floor at 0 to avoid going negative)
+            self.growth_counter = max(self.growth_counter - 1, 0)
+
+    def is_head_outside_board(self):
+        """Return True if the snake's head is outside the 8x8 board."""
+        return not (0 <= self.head[0] < BOARD_SIZE and 0 <= self.head[1] < BOARD_SIZE)
+
     def grow(self, amount=1):
-        """Add segments to the snake's growth counter."""
+        """Schedule the snake to gain `amount` extra segments on upcoming updates."""
         self.growth_counter += amount
-    
+
     def get_all_positions(self):
-        """Return all positions occupied by the snake."""
-        return [tuple(self.head)] + self.tail
-    
+        """Return every grid cell currently occupied by this snake (head + all tail segments)."""
+        return [self.head] + self.tail
+
     def display(self, sense):
-        """Display the snake on the Sense HAT."""
+        """Light up every cell this snake occupies on the Sense HAT LED matrix."""
         for (x, y) in self.tail:
-            sense.set_pixel(x, y, self.color)
-        sense.set_pixel(self.head[0], self.head[1], self.color)
-    
+            sense.set_pixel(x, y, self.color) 
+        if not self.is_head_outside_board():
+            sense.set_pixel(self.head[0], self.head[1], self.color)
+
     @staticmethod
     def _is_opposite_direction(current, next_dir):
-        """Check if next direction is opposite to current direction."""
+        """Return True if next_dir would turn the snake directly back on itself."""
         opposites = {
             Direction.UP: Direction.DOWN,
             Direction.DOWN: Direction.UP,
@@ -157,106 +124,127 @@ class Snake:
 
 
 def main():
-    global last_key_pressed
+    # Initialise the Sense HAT and blank all LEDs
     sense = SenseHat()
     sense.clear()
-    
-    # Colors
+
+    # Track the last key pressed by snake 2; updated by the pynput listener thread
+    last_key = [None]
+
+    def on_press(key):
+        try:
+            last_key[0] = key.char
+        except AttributeError:
+            pass
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+
+    # Colours for each game element on the LED matrix
     green = (0, 255, 0)
     blue = (0, 0, 255)
     red = (255, 0, 0)
-    
-    # Setup joystick constants
-    up_key = sense_hat.DIRECTION_UP
-    down_key = sense_hat.DIRECTION_DOWN
-    left_key = sense_hat.DIRECTION_LEFT
-    right_key = sense_hat.DIRECTION_RIGHT
-    pressed_key = sense_hat.ACTION_PRESSED
-    
-    # Create two snakes
-    # Start snakes in opposite corners
-    snake1 = Snake((0, 0), Direction.RIGHT, green)  # Joystick-controlled (top-left)
-    snake2 = Snake((BOARD_SIZE - 1, BOARD_SIZE - 1), Direction.LEFT, blue)    # ASDW-controlled (bottom-right)
-    
-    # No global keyboard package used; snake2 is controlled via ASDW/arrow keys.
-    
+
+    # Snake 1: starts top-left, moves right, controlled by the Sense HAT joystick
+    snake1 = Snake((0, 0), Direction.RIGHT, green)
+    # Snake 2: starts bottom-right, moves left, controlled by WASD on the keyboard
+    snake2 = Snake((BOARD_SIZE - 1, BOARD_SIZE - 1), Direction.LEFT, blue)
+
+    # Apple position; None means one needs to be spawned at the start of the next tick
     apple = None
-    time_since_last_apple = 0
 
-    stop_event = threading.Event()
-    reader_thread = threading.Thread(target=key_reader, args=(stop_event,), daemon=True)
-    reader_thread.start()
-    try:
-        while True:
-            # Generate apple if needed
-            if apple is None:
-                all_snake_positions = set(snake1.get_all_positions() + snake2.get_all_positions())
-                no_snake_pixels = [(x, y) for x in range(BOARD_SIZE) for y in range(BOARD_SIZE) if (x, y) not in all_snake_positions]
-                
-                if no_snake_pixels:
-                    apple = random.choice(no_snake_pixels)
-            
-            # Handle joystick input for snake1
-            for event in sense.stick.get_events():
-                if event.action == pressed_key:
-                    if event.direction == up_key:
-                        snake1.set_direction(Direction.UP)
-                    elif event.direction == down_key:
-                        snake1.set_direction(Direction.DOWN)
-                    elif event.direction == left_key:
-                        snake1.set_direction(Direction.LEFT)
-                    elif event.direction == right_key:
-                        snake1.set_direction(Direction.RIGHT)
+    while True:
+        # --- Spawn apple ---
+        # If there is no apple on the board, pick a random unoccupied cell and place one
+        if apple is None:
+            occupied = snake1.get_all_positions() + snake2.get_all_positions()
+            empty_cells = [
+                [x, y]
+                for x in range(BOARD_SIZE)
+                for y in range(BOARD_SIZE)
+                if [x, y] not in occupied
+            ]
+            if empty_cells:
+                apple = random.choice(empty_cells)
 
-            # Read last key pressed by the background reader and clear it
-            with key_lock:
-                k = last_key_pressed
-                last_key_pressed = None
-            logger.debug(f"main read last_key_pressed: {repr(k)}")
+        # --- Snake 1 input: Sense HAT joystick ---
+        # get_events() drains all joystick events queued since the last call
+        for event in sense.stick.get_events():
+            if event.action == sense_hat.ACTION_PRESSED:
+                if event.direction == sense_hat.DIRECTION_UP:
+                    snake1.set_direction(Direction.UP)
+                elif event.direction == sense_hat.DIRECTION_DOWN:
+                    snake1.set_direction(Direction.DOWN)
+                elif event.direction == sense_hat.DIRECTION_LEFT:
+                    snake1.set_direction(Direction.LEFT)
+                elif event.direction == sense_hat.DIRECTION_RIGHT:
+                    snake1.set_direction(Direction.RIGHT)
 
-            if k:
-                if k == 'w':
-                    snake2.set_direction(Direction.UP)
-                elif k == 's':
-                    snake2.set_direction(Direction.DOWN)
-                elif k == 'a':
-                    snake2.set_direction(Direction.LEFT)
-                elif k == 'd':
-                    snake2.set_direction(Direction.RIGHT)
+        # --- Snake 2 input: keyboard (WASD) ---
+        key = last_key[0]
+        last_key[0] = None
+        logger.debug(f"key pressed: {key}")
 
-            # Update both snakes
-            snake1.update()
-            snake2.update()
-            
-            # Update apple timer
-            time_since_last_apple += 1
-            
-            # Check apple collision for snake1s
-            if apple and snake1.head == list(apple):
-                snake1.grow(1)
-                time_since_last_apple = 0
-                apple = None
-            
-            # Check apple collision for snake2
-            if apple and snake2.head == list(apple):
-                snake2.grow(1)
-                time_since_last_apple = 0
-                apple = None
-            
-            # Clear and display
-            sense.clear()
-            
-            if apple:
-                sense.set_pixel(apple[0], apple[1], red)
-            
-            snake1.display(sense)
-            snake2.display(sense)
-            
-            time.sleep(0.5)
-    finally:
-        stop_event.set()
-        reader_thread.join(timeout=0.5)
+        if key == 'w':
+            snake2.set_direction(Direction.UP)
+        elif key == 's':
+            snake2.set_direction(Direction.DOWN)
+        elif key == 'a':
+            snake2.set_direction(Direction.LEFT)
+        elif key == 'd':
+            snake2.set_direction(Direction.RIGHT)
+
+        # --- Update ---
+        # Advance both snakes one step according to their current directions
+        snake1.update()
+        snake2.update()
+
+        # Check if snake 1's head landed on the apple
+        if apple and snake1.head == apple:
+            snake1.grow(1)
+            apple = None
+
+        # Check if snake 2's head landed on the apple
+        if apple and snake2.head == apple:
+            snake2.grow(1)
+            apple = None
+
+        # --- Draw ---
+        # Clear the LED matrix, then repaint the apple and both snakes
+        sense.clear()
+        if apple:
+            sense.set_pixel(apple[0], apple[1], red)
+        snake1.display(sense)
+        snake2.display(sense)
+        #test for game over conditions
+        alive1 = True
+        alive2 = True
 
 
-if __name__ == "__main__":  
+        if (snake1.head in snake1.tail 
+            or snake1.head in snake2.get_all_positions() 
+            or snake1.is_head_outside_board()):
+            alive1 = False
+
+        if (snake2.head in snake2.tail
+            or snake2.head in snake1.get_all_positions() 
+            or snake2.is_head_outside_board()):
+            alive2 = False
+    
+        # Wait before the next tick — reducing this value speeds the game up
+        time.sleep(0.5)
+        if not alive1 and not alive2:
+            sense.show_message("Draw!", text_colour=[255, 0, 0])
+            break
+        elif not alive1:
+            sense.show_message("Blue!", text_colour=blue)
+            break
+        elif not alive2:
+            sense.show_message("Green!", text_colour=green)
+            break
+
+    listener.stop()
+
+if __name__ == "__main__":
     main()
+
