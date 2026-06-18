@@ -1,11 +1,15 @@
 
 #to install a virtual enviroment with access to the system packages
+#Tools -> Open System Shell
 #python3 -m venv --system-site-packages /home/alex/Documents/thonny_experiment/python_venv
 
 #then
+#close window
+#Tools->options->intrepreter and select you folder above (go into bin and find python3)
+
+#Tools -> Open System Shell
 #pip install pynput
-
-
+#
 
 import sense_hat
 from sense_hat import SenseHat
