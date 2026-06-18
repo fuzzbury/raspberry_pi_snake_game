@@ -1,16 +1,23 @@
+
+#to install a virtual enviroment with access to the system packages
+#python3 -m venv --system-site-packages /home/alex/Documents/thonny_experiment/python_venv
+
+#then
+#pip install pynput
+
+
+
 import sense_hat
 from sense_hat import SenseHat
 import time
 import enum
 import random
-import curses
 import logging
-alive1 = True
-alive2 = True
+from pynput import keyboard #pip install pynput
+
 BOARD_SIZE = 8
 
-# Log to a file instead of stdout — curses takes over the terminal display so
-# any print/logging to stdout would corrupt the curses screen.
+# Log to a file instead of stdout so it doesn't interfere with game output.
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s %(levelname)s: %(message)s',
@@ -112,17 +119,22 @@ class Snake:
         return opposites.get(current) == next_dir
 
 
-def main(stdscr):
+def main():
     # Initialise the Sense HAT and blank all LEDs
     sense = SenseHat()
     sense.clear()
 
-    # nodelay(True) makes getch() return -1 immediately when no key is waiting,
-    # so the game loop never blocks waiting for player input.
-    stdscr.nodelay(True)
-    # keypad(True) tells curses to decode multi-byte escape sequences (e.g. arrow keys)
-    # into named constants like curses.KEY_UP automatically.
-    stdscr.keypad(True)
+    # Track the last key pressed by snake 2; updated by the pynput listener thread
+    last_key = [None]
+
+    def on_press(key):
+        try:
+            last_key[0] = key.char
+        except AttributeError:
+            pass
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
 
     # Colours for each game element on the LED matrix
     green = (0, 255, 0)
@@ -165,17 +177,17 @@ def main(stdscr):
                     snake1.set_direction(Direction.RIGHT)
 
         # --- Snake 2 input: keyboard (WASD) ---
-        # getch() returns -1 when no key is pressed (non-blocking due to nodelay above)
-        key = stdscr.getch()
-        logger.debug(f"getch returned: {key}")
+        key = last_key[0]
+        last_key[0] = None
+        logger.debug(f"key pressed: {key}")
 
-        if key == ord('w'):
+        if key == 'w':
             snake2.set_direction(Direction.UP)
-        elif key == ord('s'):
+        elif key == 's':
             snake2.set_direction(Direction.DOWN)
-        elif key == ord('a'):
+        elif key == 'a':
             snake2.set_direction(Direction.LEFT)
-        elif key == ord('d'):
+        elif key == 'd':
             snake2.set_direction(Direction.RIGHT)
 
         # --- Update ---
@@ -227,7 +239,8 @@ def main(stdscr):
             sense.show_message("Green!", text_colour=green)
             break
 
+    listener.stop()
+
 if __name__ == "__main__":
-    # curses.wrapper sets up curses, passes a screen object to main(),
-    # and automatically restores the terminal to its original state when main() returns or raises.
-    curses.wrapper(main)
+    main()
+
