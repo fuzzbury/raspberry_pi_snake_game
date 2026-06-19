@@ -10,6 +10,22 @@
 #Tools -> Open System Shell
 #pip install pynput
 #
+# WHY python3 -m venv --system-site-packages
+# A regular venv is deliberately isolated — 
+# it only sees packages installed via pip into that venv, 
+# nothing from the system. 
+# This is the whole point of a venv (reproducible, conflict-free environments).
+
+# RTIMU was never published to PyPI because it's a 
+# C library compiled specifically for the Raspberry Pi hardware 
+# by the Raspberry Pi Foundation and shipped as part of Raspberry Pi OS via apt. 
+# So there's literally nothing for pip to download and install — 
+# it doesn't exist as a pip package.
+
+# That's why --system-site-packages is the fix: 
+# it pokes a hole in the isolation just enough to let the venv 
+# see the system's apt-installed packages (like RTIMU) 
+# while still keeping its own pip packages separate.
 
 import sense_hat
 from sense_hat import SenseHat
